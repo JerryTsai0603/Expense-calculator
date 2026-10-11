@@ -513,12 +513,12 @@ function modalReceipt(){
   return `<div class="overlay"><div class="sheet" role="dialog" aria-label="收據明細"><div class="sheet-head"><button class="btn ghost" data-act="close">取消</button><h3>${S.edit.isNew?"確認收據":"收據明細"}</h3><button class="btn ghost" data-act="saveRc"><b>儲存</b></button></div>
   <div class="sheet-body">
   ${hasPhoto(r)?`<img class="photo ${S.bigPhoto?"big":""}" src="${PH[r.id]||r.photo||(r.photoId?"/_blob/"+r.photoId:r.thumb)}" alt="收據照片" data-act="zoom" onerror="this.onerror=null;this.src='${r.thumb||""}'">`:`<button class="addphoto" data-act="pickRcPhoto" ${S.rcPhotoBusy?"disabled":""}>${S.rcPhotoBusy?"照片處理中…":"📷 加入收據照片"}</button>`}
-  ${hasPhoto(r)?`<div class="row" style="margin:-4px 0 12px;justify-content:flex-end"><button class="btn small" data-act="pickRcPhoto" ${S.rcPhotoBusy?"disabled":""}>${S.rcPhotoBusy?"處理中…":"更換照片"}</button><button class="btn small danger" data-act="clearRcPhoto">移除照片</button></div>`:""}
+  ${hasPhoto(r)?`<div class="row" style="margin:-4px 0 12px;justify-content:flex-end">${aiImgOK()?`<button class="btn small primary" data-act="aiPhotoBtn" ${S.parsing?"disabled":""}>${S.parsing?"AI 辨識中…":"🤖 AI 辨識照片"}</button>`:""}<button class="btn small" data-act="pickRcPhoto" ${S.rcPhotoBusy?"disabled":""}>${S.rcPhotoBusy?"處理中…":"更換照片"}</button><button class="btn small danger" data-act="clearRcPhoto">移除照片</button></div>`:""}
   ${r.pending?`<div class="status no">這張收據正在等 Claude 辨識。也可以直接手動填寫，儲存後就不會再被辨識。</div>`:""}
   ${r.aiTotal!=null&&cents(r.aiTotal)!==rTotal(r)?`<div class="status no">收據上辨識到的總額是 ${money(cents(r.aiTotal),t.currency)}，與品項加總不同，請核對。</div>`:""}
   <div class="row" style="margin:6px 0 12px"><label class="field" style="flex:2 1 180px">店家／名稱<input data-e="store" value="${esc(r.store)}" placeholder="例如：一蘭拉麵"></label><label class="field">日期<input type="date" data-e="date" value="${r.date||""}"></label></div>
   <label class="field" style="margin-bottom:6px">備註<input data-e="note" value="${esc(r.note||"")}" placeholder="選填"></label>
-  ${(()=>{const pp=parsePrefs(),aiOK=!!(sample&&!aiOff),mode=parseMode();return `<details class="item" data-paste ${S.pasteOpen||r.items.every(i=>!cents(i.amount))?"open":""}><summary style="cursor:pointer;font-weight:500">貼上收據文字自動辨識</summary>
+  ${(()=>{const pp=parsePrefs(),aiOK=!!(sample&&!aiOff),mode=parseMode();return `<details class="item" data-paste ${S.pasteOpen||r.items.every(i=>!cents(i.amount))?"open":""}><summary style="cursor:pointer;font-weight:500">貼上收據文字辨識</summary>
     <div class="chips"><span class="hint" style="align-self:center">辨識方式</span><button class="chip" aria-pressed="${mode==="ai"}" data-act="parseMode" data-v="ai" ${aiOK?"":"disabled"}>AI 辨識</button><button class="chip" aria-pressed="${mode==="rule"}" data-act="parseMode" data-v="rule">規則辨識（免 AI）</button>
       <button class="chip all" aria-pressed="${!!pp.auto}" data-act="toggleAutoParse">${pp.auto?"✓ ":""}貼上後自動辨識</button></div>
     <p class="hint" style="margin:6px 0">${mode==="ai"?"AI 會理解排版混亂、外文或錯字的收據。":"規則辨識在手機上直接處理，不需金鑰、不花費用，適合「品名 … 金額」一行一項的收據。"}${aiOK?"":" AI 辨識需先"+(window.claude?"允許使用 Claude":"在 ⚙︎ 設定填入 API 金鑰")+"。"}<br>iPhone：在「照片」App 打開收據，長按文字 →「全選」→「拷貝」，貼到下面。也可以直接打字，例如「牛肉麵 180、小菜 60、飲料 2杯 100」。</p>
@@ -574,7 +574,7 @@ const PROMPT=`你是收據與發票的辨識助手。圖片是一張旅途中的
 - 品項名稱保留原文；若不是中文，在後面用括號附上繁體中文翻譯。
 - 看不清楚的數字填最可能的值。若圖片不是收據，items 回傳 []、total 回傳 0。`;
 const PPK="tripsplit.parse";
-function parsePrefs(){try{return JSON.parse(localStorage.getItem(PPK)||"{}")||{}}catch(e){return {}}}
+function parsePrefs(){let p={};try{p=JSON.parse(localStorage.getItem(PPK)||"{}")||{}}catch(e){}if(p.auto===undefined)p.auto=true;return p}
 function setParsePrefs(o){try{localStorage.setItem(PPK,JSON.stringify(Object.assign(parsePrefs(),o)))}catch(e){}}
 function parseMode(){const aiOK=!!(sample&&!aiOff),m=parsePrefs().mode;return aiOK&&m!=="rule"?"ai":"rule"}
 /* rule-based receipt text parser (no AI) */
@@ -602,6 +602,18 @@ function ruleParse(raw){
   if(!service&&svcAmt){const sum=items.reduce((a,i)=>a+i.amount,0),p=Math.round(sum?svcAmt/sum*100:0);
     if(p>0&&p<40&&Math.abs(Math.round(sum*p/100)-svcAmt)<=1)service=p;else items.push({name:"服務費",amount:svcAmt})}
   return {store,date,items,service,total}}
+const aiImgOK=()=>!!(sample&&canImg&&!aiOff&&!imgOff);
+function applyParsed(r,data,label){const {items,tot,svc}=buildItems(data);if(!items.length)return 0;
+  r.items=items;r.svc=svc;r.aiTotal=tot?tot/100:null;if(!r.store&&data.store)r.store=String(data.store);
+  if(/^\d{4}-\d{2}-\d{2}$/.test(data.date||""))r.date=data.date;r.pending=false;toast(label+"：已填入 "+items.length+" 個項目，請核對");return items.length}
+const aiErrText=e=>e&&e.code==="not_granted"?"需要允許使用 Claude 才能辨識":e&&e.code==="rate_limited"?"使用量已達上限，請稍後再試":(aiMsg(e)||"辨識失敗，請再試一次");
+async function aiPhoto(r,img,ask=true){if(!aiImgOK()||!img)return;
+  if(ask&&r.items.some(i=>cents(i.amount))&&!await askConfirm("用照片的 AI 辨識結果取代目前的項目嗎？","取代"))return;
+  S.parsing=true;renderModal();
+  try{const blob=await toBlob(img,1800,.85).blob;const data=await sample.json(PROMPT,{images:blob});
+    if(S.edit&&S.edit.data===r){if(!applyParsed(r,data,"AI 照片辨識"))toast("照片裡看不出消費明細")}}
+  catch(e){if(["images_unavailable","image_rejected"].includes(e.code)){imgOff=true;canImg=false;toast("這個環境無法傳圖片給 AI，請改用貼上文字辨識")}else toast(aiErrText(e))}
+  S.parsing=false;if(S.edit&&S.edit.data===r)renderModal()}
 function buildItems(data){const items=(Array.isArray(data.items)?data.items:[]).map(i=>({id:uidGen(),name:String(i.name||"品項"),amount:Number(i.amount)||0,split:null}));
   const sv=Number(data.service);const svc=isFinite(sv)&&sv>0&&sv<100?String(sv):"";
   const sum=items.reduce((s,i)=>s+cents(i.amount),0),tot=cents(data.total),exp=sum+svcCents(sum,+svc||0);
@@ -856,6 +868,8 @@ const A={
   manual(){const t=trip();S.edit={type:"rc",isNew:true,data:{kind:"receipt",id:uidGen(),tripId:t.id,store:"",date:today(),note:"",thumb:"",items:[{id:uidGen(),name:"",amount:0,split:null}],payers:[],aiTotal:null,created:new Date().toISOString()}};render()},
   openRc(el){const r=S.receipts.find(x=>x.id===el.dataset.id);if(!r)return;S.tripId=r.tripId;S.view="trip";S.tab="receipts";S.edit={type:"rc",isNew:false,data:JSON.parse(JSON.stringify(r))};S.bigPhoto=false;render()},
   close(){S.pasteOpen=false;if(S.edit&&S.edit.type==="rc"&&S.edit.isNew&&S.edit.photoChanged&&!S.receipts.some(x=>x.id===S.edit.data.id))delPhoto(S.edit.data);S.edit=null;S.bigPhoto=false;render()},
+  async aiPhotoBtn(){const r=S.edit.data;const src=PH[r.id]||await getPhoto(r)||r.photo||r.thumb;const img=src?await imgFrom(src):null;
+    if(!img){toast("讀不到這張照片，請按「更換照片」重新上傳");return}await aiPhoto(r,img,true)},
   pickRcPhoto(){const f=$("#rcPhoto");f.value="";f.click()},
   async clearRcPhoto(){if(!await askConfirm("移除這張收據的照片？","移除"))return;const r=S.edit.data;delPhoto(r);["thumb","photo","photoId","photoN"].forEach(k=>delete r[k]);
     const saved=S.receipts.find(x=>x.id===r.id);if(saved){["thumb","photo","photoId","photoN"].forEach(k=>delete saved[k]);persist(saved)}renderModal()},
@@ -865,11 +879,10 @@ const A={
     S.parsing=true;renderModal();const mode=parseMode();
     try{const data=mode==="rule"?ruleParse(txt):await sample.json(PROMPT_TEXT+"\n\n收據文字：\n"+txt.slice(0,8000),{modelTier:"default"});
       if(!S.edit||S.edit.data!==r)return;
-      const {items,tot,svc}=buildItems(data);
-      if(!items.length){toast(mode==="rule"?"看不出品項，請確認是「品名 金額」的格式，或改用 AI 辨識":"看不出消費明細，請確認文字內容");}
-      else{r.items=items;r.svc=svc;r.aiTotal=tot?tot/100:null;if(!r.store&&data.store)r.store=String(data.store);
-        if(/^\d{4}-\d{2}-\d{2}$/.test(data.date||""))r.date=data.date;r.pasteText="";S.pasteOpen=false;toast((mode==="rule"?"規則辨識：":"")+"已填入 "+items.length+" 個項目，請核對")}
-    }catch(e){toast(e.code==="not_granted"?"需要允許使用 Claude 才能辨識":e.code==="rate_limited"?"Claude 使用量已達上限，請稍後再試":(aiMsg(e)||"辨識失敗，請再試一次"))}
+      const n=applyParsed(r,data,mode==="rule"?"規則辨識":"AI 文字辨識");
+      if(!n){toast(mode==="rule"?"看不出品項，請確認是「品名 金額」的格式，或改用 AI 辨識":"看不出消費明細，請確認文字內容");}
+      else{r.pasteText="";S.pasteOpen=false}
+    }catch(e){toast(aiErrText(e))}
     S.parsing=false;if(S.edit)renderModal()},
   copyRelay(){(navigator.clipboard?navigator.clipboard.writeText(RELAY):Promise.reject()).then(()=>toast("已複製，貼到 Claude 對話送出即可")).catch(()=>toast("請長按文字手動複製"))},
   saveRc(){const r=S.edit.data;delete r.pasteText;if(r.items.some(i=>cents(i.amount)))r.pending=false;r.items=r.items.filter(i=>i.name.trim()||cents(i.amount));
@@ -953,11 +966,12 @@ async function attachPhoto(r,img){
 $("#rcPhoto").addEventListener("change",async e=>{const f=e.target.files[0];if(!f||!S.edit||S.edit.type!=="rc")return;const r=S.edit.data;
   let img;try{img=await loadImg(f)}catch(err){toast("這張照片的格式無法讀取，請改選其他照片或截圖");return}
   S.rcPhotoBusy=true;renderModal();
-  try{await attachPhoto(r,img);if(img.src&&String(img.src).startsWith("blob:"))URL.revokeObjectURL(img.src);
+  try{await attachPhoto(r,img);
     S.edit.photoChanged=true;
     const saved=S.receipts.find(x=>x.id===r.id);if(saved){Object.assign(saved,{thumb:r.thumb,photo:r.photo,photoN:r.photoN});delete saved.photoId;persist(saved)}
     toast("已加入照片")}catch(err){console.warn(err);toast("照片處理失敗："+(err&&err.message||err))}
-  S.rcPhotoBusy=false;if(S.edit&&S.edit.data===r)renderModal()});
+  S.rcPhotoBusy=false;if(S.edit&&S.edit.data===r)renderModal();
+  if(aiImgOK()&&S.edit&&S.edit.data===r)await aiPhoto(r,img,true)});
 function newContact(n){const c={kind:"contact",id:uidGen(),name:n,avatar:"",created:new Date().toISOString()};S.contacts.push(c);persist(c);return c}
 $("#avatarFile").addEventListener("change",async e=>{const f=e.target.files[0],id=S.avatarFor;if(!f||!id)return;
   let img;try{img=await loadImg(f)}catch(err){toast("這張照片的格式無法讀取，請改選其他照片或截圖");return}
