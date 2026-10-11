@@ -341,7 +341,8 @@ function alloc(c,ws){const sign=c<0?-1:1,a=Math.abs(c),W=ws.reduce((s,x)=>s+x[1]
 function wLabel(t,it){const ws=itemAlloc(t,it);if(it.mode!=="ratio")return ws.map(([id])=>pname(t,id)).join("/");return ws.map(([id,w])=>pname(t,id)+"×"+(it.weights[id]||w)).join("/")}
 function svcPct(r){const v=parseFloat(r.svc);return isFinite(v)&&v>0?v:0}
 function rSub(r){return r.items.reduce((s,i)=>s+cents(i.amount),0)}
-function rSvc(r){return Math.round(rSub(r)*svcPct(r)/100)}
+function svcCents(sub,pct){const v=sub*pct/100;return sub%100===0?Math.round(v/100)*100:Math.round(v)}
+function rSvc(r){return svcCents(rSub(r),svcPct(r))}
 function rTotal(r){return rSub(r)+rSvc(r)}
 function rPaid(r){return (r.payers||[]).reduce((s,p)=>s+cents(p.amount),0)}
 function rOK(r){return (r.payers||[]).length>0&&rPaid(r)===rTotal(r)}
@@ -517,10 +518,13 @@ function modalReceipt(){
   ${r.aiTotal!=null&&cents(r.aiTotal)!==rTotal(r)?`<div class="status no">收據上辨識到的總額是 ${money(cents(r.aiTotal),t.currency)}，與品項加總不同，請核對。</div>`:""}
   <div class="row" style="margin:6px 0 12px"><label class="field" style="flex:2 1 180px">店家／名稱<input data-e="store" value="${esc(r.store)}" placeholder="例如：一蘭拉麵"></label><label class="field">日期<input type="date" data-e="date" value="${r.date||""}"></label></div>
   <label class="field" style="margin-bottom:6px">備註<input data-e="note" value="${esc(r.note||"")}" placeholder="選填"></label>
-  ${sample&&!aiOff?`<details class="item" ${r.items.every(i=>!cents(i.amount))?"open":""}><summary style="cursor:pointer;font-weight:500">貼上收據文字，讓 Claude 自動辨識</summary>
-    <p class="hint" style="margin:6px 0">iPhone：在「照片」App 打開收據，長按文字 →「全選」→「拷貝」，貼到下面。也可以直接打字，例如「牛肉麵 180、小菜 60、飲料 2杯 100」。</p>
+  ${(()=>{const pp=parsePrefs(),aiOK=!!(sample&&!aiOff),mode=parseMode();return `<details class="item" data-paste ${S.pasteOpen||r.items.every(i=>!cents(i.amount))?"open":""}><summary style="cursor:pointer;font-weight:500">貼上收據文字自動辨識</summary>
+    <div class="chips"><span class="hint" style="align-self:center">辨識方式</span><button class="chip" aria-pressed="${mode==="ai"}" data-act="parseMode" data-v="ai" ${aiOK?"":"disabled"}>AI 辨識</button><button class="chip" aria-pressed="${mode==="rule"}" data-act="parseMode" data-v="rule">規則辨識（免 AI）</button>
+      <button class="chip all" aria-pressed="${!!pp.auto}" data-act="toggleAutoParse">${pp.auto?"✓ ":""}貼上後自動辨識</button></div>
+    <p class="hint" style="margin:6px 0">${mode==="ai"?"AI 會理解排版混亂、外文或錯字的收據。":"規則辨識在手機上直接處理，不需金鑰、不花費用，適合「品名 … 金額」一行一項的收據。"}${aiOK?"":" AI 辨識需先"+(window.claude?"允許使用 Claude":"在 ⚙︎ 設定填入 API 金鑰")+"。"}<br>iPhone：在「照片」App 打開收據，長按文字 →「全選」→「拷貝」，貼到下面。也可以直接打字，例如「牛肉麵 180、小菜 60、飲料 2杯 100」。</p>
     <textarea class="inp" data-e="pasteText" rows="5" placeholder="在這裡貼上收據文字…">${esc(r.pasteText||"")}</textarea>
-    <button class="btn primary small" data-act="parseText" style="margin-top:8px" ${S.parsing?"disabled":""}>${S.parsing?"辨識中…":"辨識並填入項目"}</button></details>`:""}
+    ${pp.auto?`<p class="hint" style="margin:6px 0 0">${S.parsing?"辨識中…":"貼上後會自動辨識；手打的文字請按下方按鈕。"}</p>`:""}
+    <button class="btn primary small" data-act="parseText" style="margin-top:8px" ${S.parsing?"disabled":""}>${S.parsing?"辨識中…":"辨識並填入項目"}</button></details>`})()}
   <h2 class="sec"><span class="grow">費用項目</span><button class="btn small" data-act="allSplitAll">全部改為全員平均</button></h2>
   <p class="hint" style="margin-top:-6px">點選人名＝只由這些人平分；只選一人＝由他自己負擔；「依比例」可填 1/4、3/4 或 1、3 這類比例。</p>
   ${items||`<p class="hint">還沒有品項。</p>`}
@@ -569,9 +573,38 @@ const PROMPT=`你是收據與發票的辨識助手。圖片是一張旅途中的
 - total 是最後實際應付的總額。
 - 品項名稱保留原文；若不是中文，在後面用括號附上繁體中文翻譯。
 - 看不清楚的數字填最可能的值。若圖片不是收據，items 回傳 []、total 回傳 0。`;
+const PPK="tripsplit.parse";
+function parsePrefs(){try{return JSON.parse(localStorage.getItem(PPK)||"{}")||{}}catch(e){return {}}}
+function setParsePrefs(o){try{localStorage.setItem(PPK,JSON.stringify(Object.assign(parsePrefs(),o)))}catch(e){}}
+function parseMode(){const aiOK=!!(sample&&!aiOff),m=parsePrefs().mode;return aiOK&&m!=="rule"?"ai":"rule"}
+/* rule-based receipt text parser (no AI) */
+function ruleParse(raw){
+  let t=String(raw||"").replace(/[０-９Ａ-Ｚａ-ｚ]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)).replace(/．/g,".").replace(/＄/g,"$").replace(/％/g,"%").replace(/：/g,":").replace(/（/g,"(").replace(/）/g,")").replace(/　/g," ")
+    .replace(/(\d)[,，](?=\d{3}(?!\d))/g,"$1");
+  let date=null;const dm=t.match(/(\d{2,4})\s*[\/\-.年]\s*(\d{1,2})\s*[\/\-.月]\s*(\d{1,2})/);
+  if(dm){let y=+dm[1];if(y<1000)y+=1911;const mo=+dm[2],d=+dm[3];if(y>=2000&&y<2100&&mo>=1&&mo<=12&&d>=1&&d<=31)date=y+"-"+String(mo).padStart(2,"0")+"-"+String(d).padStart(2,"0")}
+  const SKIP=/統一?編號|統編|發票|電話|tel|地址|桌號|單號|序號|客數|人數|日期|時間|收銀|機號|找零|找回|現金|信用卡|刷卡|悠遊|pay\b|載具|謝謝|歡迎|取消|作廢|change|cash|card|visa|master|invoice|table|receipt\s*no|品項|單價|數量|qty/i,
+    TOTAL=/總計|合計|總額|總金額|應付|實付|應收|total|amount\s*due|grand/i,SUB=/小計|subtotal/i,SVC=/服務費|service|サービス/i,DISC=/折扣|折價|優惠|discount|coupon|折抵|減免/i;
+  let store="",total=0,svcPct=0,svcAmt=0;const items=[];
+  for(let l of t.split(/\n|、|；|;|[,，](?=\s*\D)/)){l=l.trim();if(!l)continue;
+    const l2=l.replace(/\d{2,4}\s*[\/\-.年]\s*\d{1,2}\s*[\/\-.月]\s*\d{1,2}日?/g," ").replace(/\d{1,2}:\d{2}(:\d{2})?/g," ").replace(/^\s*[#No.]*\d{1,2}\s*[.)、:]?\s+(?=\D)/,"");
+    const nums=[...l2.matchAll(/-?\d+(?:\.\d+)?(?!\s*%)/g)],last=nums.length?parseFloat(nums[nums.length-1][0]):null,pct=l2.match(/(\d+(?:\.\d+)?)\s*%/);
+    if(SVC.test(l)){if(pct)svcPct=+pct[1];else if(last!=null)svcAmt=Math.abs(last);continue}
+    if(TOTAL.test(l)){if(last!=null)total=Math.abs(last);continue}
+    if(SUB.test(l)||SKIP.test(l))continue;
+    if(last==null){const st=l.replace(/\d{2,4}\s*[\/\-.年]\s*\d{1,2}\s*[\/\-.月]\s*\d{1,2}日?/g,"").trim();if(!store&&!items.length&&/\p{L}/u.test(st)&&st.length<=40)store=st;continue}
+    const lastTok=nums[nums.length-1];let name=l2.slice(0,lastTok.index);
+    name=name.replace(/(NT)?\$|[¥￥€£₩฿]|円|元|NTD|TWD|JPY|USD/gi," ").replace(/\s*[x×X*@]?\s*\d+(\.\d+)?\s*(杯|份|個|碗|盤|瓶|位|人|客|件|包|罐|串|支|pcs?|ea)?\s*[x×X*]?\s*$/i,"").replace(/\s*[x×X*]\s*\d+\s*$/,"").replace(/\s+\d+\s*$/,"").replace(/[:\-–—.·…]+\s*$/,"").trim();
+    if(!/\p{L}/u.test(name))continue;
+    let amount=last;if(DISC.test(l))amount=-Math.abs(amount);
+    items.push({name,amount})}
+  let service=svcPct;
+  if(!service&&svcAmt){const sum=items.reduce((a,i)=>a+i.amount,0),p=Math.round(sum?svcAmt/sum*100:0);
+    if(p>0&&p<40&&Math.abs(Math.round(sum*p/100)-svcAmt)<=1)service=p;else items.push({name:"服務費",amount:svcAmt})}
+  return {store,date,items,service,total}}
 function buildItems(data){const items=(Array.isArray(data.items)?data.items:[]).map(i=>({id:uidGen(),name:String(i.name||"品項"),amount:Number(i.amount)||0,split:null}));
   const sv=Number(data.service);const svc=isFinite(sv)&&sv>0&&sv<100?String(sv):"";
-  const sum=items.reduce((s,i)=>s+cents(i.amount),0),tot=cents(data.total),exp=sum+Math.round(sum*(+svc||0)/100);
+  const sum=items.reduce((s,i)=>s+cents(i.amount),0),tot=cents(data.total),exp=sum+svcCents(sum,+svc||0);
   if(tot&&exp!==tot&&items.length){const adj=Math.round((tot-exp)/(1+(+svc||0)/100));items.push({id:uidGen(),name:"差額調整（折扣／稅）",amount:adj/100,split:null})}
   return {items,tot,svc}}
 const PROMPT_TEXT=PROMPT.replace("圖片是一張旅途中的消費收據、發票或帳單。","下面是從一張旅途消費收據、發票或帳單上複製（或手打）的文字，排版可能錯亂、可能有辨識錯字，請盡量還原。").replace("若圖片不是收據","若文字看不出消費明細");
@@ -822,20 +855,20 @@ const A={
   upload(){$("#file").value="";$("#file").click()},
   manual(){const t=trip();S.edit={type:"rc",isNew:true,data:{kind:"receipt",id:uidGen(),tripId:t.id,store:"",date:today(),note:"",thumb:"",items:[{id:uidGen(),name:"",amount:0,split:null}],payers:[],aiTotal:null,created:new Date().toISOString()}};render()},
   openRc(el){const r=S.receipts.find(x=>x.id===el.dataset.id);if(!r)return;S.tripId=r.tripId;S.view="trip";S.tab="receipts";S.edit={type:"rc",isNew:false,data:JSON.parse(JSON.stringify(r))};S.bigPhoto=false;render()},
-  close(){if(S.edit&&S.edit.type==="rc"&&S.edit.isNew&&S.edit.photoChanged&&!S.receipts.some(x=>x.id===S.edit.data.id))delPhoto(S.edit.data);S.edit=null;S.bigPhoto=false;render()},
+  close(){S.pasteOpen=false;if(S.edit&&S.edit.type==="rc"&&S.edit.isNew&&S.edit.photoChanged&&!S.receipts.some(x=>x.id===S.edit.data.id))delPhoto(S.edit.data);S.edit=null;S.bigPhoto=false;render()},
   pickRcPhoto(){const f=$("#rcPhoto");f.value="";f.click()},
   async clearRcPhoto(){if(!await askConfirm("移除這張收據的照片？","移除"))return;const r=S.edit.data;delPhoto(r);["thumb","photo","photoId","photoN"].forEach(k=>delete r[k]);
     const saved=S.receipts.find(x=>x.id===r.id);if(saved){["thumb","photo","photoId","photoN"].forEach(k=>delete saved[k]);persist(saved)}renderModal()},
   zoom(){S.bigPhoto=!S.bigPhoto;renderModal()},
   async parseText(){const r=S.edit.data,txt=(r.pasteText||"").trim();if(!txt){toast("請先貼上收據文字");return}
     if(r.items.some(i=>cents(i.amount))&&!await askConfirm("要用辨識結果取代目前的項目嗎？"))return;
-    S.parsing=true;renderModal();
-    try{const data=await sample.json(PROMPT_TEXT+"\n\n收據文字：\n"+txt.slice(0,8000),{modelTier:"default"});
+    S.parsing=true;renderModal();const mode=parseMode();
+    try{const data=mode==="rule"?ruleParse(txt):await sample.json(PROMPT_TEXT+"\n\n收據文字：\n"+txt.slice(0,8000),{modelTier:"default"});
       if(!S.edit||S.edit.data!==r)return;
       const {items,tot,svc}=buildItems(data);
-      if(!items.length){toast("看不出消費明細，請確認文字內容");}
+      if(!items.length){toast(mode==="rule"?"看不出品項，請確認是「品名 金額」的格式，或改用 AI 辨識":"看不出消費明細，請確認文字內容");}
       else{r.items=items;r.svc=svc;r.aiTotal=tot?tot/100:null;if(!r.store&&data.store)r.store=String(data.store);
-        if(/^\d{4}-\d{2}-\d{2}$/.test(data.date||""))r.date=data.date;r.pasteText="";toast("已填入 "+items.length+" 個項目，請核對")}
+        if(/^\d{4}-\d{2}-\d{2}$/.test(data.date||""))r.date=data.date;r.pasteText="";S.pasteOpen=false;toast((mode==="rule"?"規則辨識：":"")+"已填入 "+items.length+" 個項目，請核對")}
     }catch(e){toast(e.code==="not_granted"?"需要允許使用 Claude 才能辨識":e.code==="rate_limited"?"Claude 使用量已達上限，請稍後再試":(aiMsg(e)||"辨識失敗，請再試一次"))}
     S.parsing=false;if(S.edit)renderModal()},
   copyRelay(){(navigator.clipboard?navigator.clipboard.writeText(RELAY):Promise.reject()).then(()=>toast("已複製，貼到 Claude 對話送出即可")).catch(()=>toast("請長按文字手動複製"))},
@@ -852,6 +885,8 @@ const A={
     try{const r=await makeApiSample(c).json('只回覆這個 JSON，不要其他文字：{"ok":true}');toast(r&&r.ok?"✓ 設定可以使用":"已連線，但回覆格式異常")}catch(e){toast(aiMsg(e)||e.message||"測試失敗")}
     S.apiTesting=false;if(S.edit&&S.edit.type==="settings")renderModal()},
   async clearApi(){const c=S.edit.data;if(!await askConfirm("刪除 "+PROV[c.provider].name+" 的 API 金鑰？","刪除"))return;delete c.keys[c.provider];renderModal()},
+  parseMode(el){setParsePrefs({mode:el.dataset.v});renderModal()},
+  toggleAutoParse(){setParsePrefs({auto:!parsePrefs().auto});renderModal()},
   setSvc(el){S.edit.data.svc=el.dataset.v==="0"?"":el.dataset.v;renderModal()},
   addItem(){S.edit.data.items.push({id:uidGen(),name:"",amount:0,split:null});renderModal()},
   delItem(el){S.edit.data.items.splice(+el.dataset.i,1);renderModal()},
@@ -903,6 +938,9 @@ document.addEventListener("change",e=>{const el=e.target;
   if(el.dataset.e&&S.edit)S.edit.data[el.dataset.e]=el.value;
   if(el.dataset.f==="pname")render();
 });
+document.addEventListener("toggle",e=>{const el=e.target;if(el&&el.matches&&el.matches("details[data-paste]"))S.pasteOpen=el.open},true);
+document.addEventListener("paste",e=>{const el=e.target;if(!el||!el.dataset||el.dataset.e!=="pasteText"||!parsePrefs().auto||S.parsing)return;
+  setTimeout(()=>{if(!S.edit||S.edit.type!=="rc")return;S.edit.data.pasteText=el.value;if(el.value.trim())A.parseText()},80)});
 document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.id==="newPerson"){e.preventDefault();A.addPerson()}
   if(e.key==="Escape"){if(CR){closeCropper();return}if(S.edit)A.close()}});
 function hasPhoto(r){return !!(r.photo||r.thumb||r.photoId||r.photoN)}
