@@ -53,7 +53,7 @@ button{cursor:pointer}
 .brand small{font-family:var(--sans);font-weight:400;font-size:.8rem;color:var(--muted);letter-spacing:0;margin-left:8px}
 .sync{font-size:.78rem;color:var(--muted);white-space:nowrap}
 
-.btn{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 14px;min-height:42px;display:inline-flex;align-items:center;gap:6px;justify-content:center}
+.btn{white-space:nowrap;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:9px 14px;min-height:42px;display:inline-flex;align-items:center;gap:6px;justify-content:center}
 .btn.primary{background:var(--teal);border-color:var(--teal);color:var(--paper);font-weight:500}
 .btn.ghost{background:transparent;border-color:transparent;color:var(--teal);padding:9px 8px}
 .btn.danger{color:var(--owe);border-color:var(--owe-soft)}
@@ -72,7 +72,7 @@ button{cursor:pointer}
 .searchbar .dates input{flex:1 1 130px}
 @media(min-width:640px){.searchbar{grid-template-columns:1fr auto}}
 
-h2.sec{font-family:var(--serif);font-weight:600;font-size:1.15rem;margin:22px 0 10px;display:flex;align-items:center;gap:10px}
+h2.sec{flex-wrap:wrap;row-gap:8px;font-family:var(--serif);font-weight:600;font-size:1.15rem;margin:22px 0 10px;display:flex;align-items:center;gap:10px}
 h2.sec .grow{flex:1;white-space:nowrap}
 
 /* trips as luggage tags */
@@ -414,7 +414,7 @@ function tabReceipts(t){
   else if(!aiReady()&&isOwner&&db)h+=`<p class="hint">這個檢視無法直接辨識照片。上傳後照片會先存起來，再交給 Claude 對話辨識並自動填回。</p>`;
   else if(!aiReady()){
     if(sample&&!aiOff)h+=`<div class="queue"><b>改用文字辨識：</b>${aiWhy()}照片照樣上傳附在收據上，接著在收據畫面打開「貼上收據文字」，就能讓 Claude 整理品項與金額。<br>iPhone 取得文字的方法：在「照片」App 打開收據，長按文字 →「全選」→「拷貝」。</div>`;
-    else if(!window.claude)h+=`<div class="queue">想讓照片自動辨識金額？到首頁右上的 <b>⚙︎ 設定</b> 填入 Claude API 金鑰即可；不設定也能手動填寫。<button class="btn small" data-act="settings" style="margin-left:6px">前往設定</button></div>`;
+    else if(!window.claude)h+=`<div class="queue">想讓照片自動辨識金額？到首頁的 <b>⚙︎ 設定</b> 填入 Claude、OpenAI、Gemini 或 MiniMax 的 API 金鑰即可；不設定也能手動填寫。<button class="btn small" data-act="settings" style="margin-left:6px">前往設定</button></div>`;
     else h+=`<div class="notice">${aiWhy()}照片仍可上傳並附在收據上，金額請手動填寫。</div>`;
   }
   const rs=recOf(t.id);
@@ -611,40 +611,68 @@ async function handleFiles(files){
   setTimeout(()=>{S.queue=S.queue.filter(q=>q.status==="等待中"||q.status==="辨識中…");render()},4000);
 }
 
-/* ---------- own Claude API key (standalone web version) ---------- */
-const AK="tripsplit.apikey",AM="tripsplit.apimodel";
-const apiKey=()=>{try{return localStorage.getItem(AK)||""}catch(e){return ""}};
-const apiModel=()=>{try{return localStorage.getItem(AM)||"claude-haiku-5-5"}catch(e){return "claude-haiku-5-5"}};
+/* ---------- own AI API key (standalone web version): Claude / OpenAI / Gemini / MiniMax / OpenAI-compatible ---------- */
+const PROV={
+  claude:{name:"Anthropic Claude",models:["claude-haiku-5-5","claude-sonnet-5-5"],hint:"Haiku 快又便宜；Sonnet 手寫收據較準",keyUrl:"console.anthropic.com",ph:"sk-ant-…",kind:"claude",ep:"https://api.anthropic.com/v1/messages"},
+  openai:{name:"OpenAI",models:["gpt-6-luna","gpt-6.1-sol","gpt-6-astra"],hint:"Luna 最便宜；Sol 較準",keyUrl:"platform.openai.com/api-keys",ph:"sk-…",kind:"oai",ep:"https://api.openai.com/v1/chat/completions"},
+  gemini:{name:"Google Gemini",models:["gemini-3.8-flash","gemini-3.5-flash-lite"],hint:"Flash 準確；Flash-Lite 最便宜",keyUrl:"aistudio.google.com/apikey",ph:"AIza…",kind:"gemini",ep:"https://generativelanguage.googleapis.com/v1beta/models"},
+  minimax:{name:"MiniMax",models:["MiniMax-M3","MiniMax-M3.1-Flash-Preview"],hint:"只有 M3 系列能讀圖片；中國區帳號請把網址改成 api.minimaxi.com",keyUrl:"platform.minimax.io",ph:"",kind:"oai",ep:"https://api.minimax.io/v1/chat/completions",epEdit:true},
+  custom:{name:"其他（OpenAI 相容）",models:[],hint:"填入服務商提供的 chat/completions 網址與支援圖片的模型名稱",keyUrl:"",ph:"",kind:"oai",ep:"",epEdit:true}};
+const AIC="tripsplit.ai";
+function aiCfg(){let c=null;try{c=JSON.parse(localStorage.getItem(AIC)||"null")}catch(e){}
+  if(!c){c={provider:"claude",keys:{},models:{},endpoints:{}};try{const k=localStorage.getItem("tripsplit.apikey");if(k){c.keys.claude=k;c.models.claude=localStorage.getItem("tripsplit.apimodel")||""}}catch(e){}}
+  c.keys=c.keys||{};c.models=c.models||{};c.endpoints=c.endpoints||{};if(!PROV[c.provider])c.provider="claude";return c}
+const cfgModel=(c,p=c.provider)=>(c.models[p]||"").trim()||PROV[p].models[0]||"";
+const cfgEp=(c,p=c.provider)=>(PROV[p].epEdit&&(c.endpoints[p]||"").trim())||PROV[p].ep;
+const apiKey=()=>{const c=aiCfg();return c.keys[c.provider]||""};
 function blob64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=()=>rej(r.error);r.readAsDataURL(b)})}
 function apiErr(code,msg){return Object.assign(new Error(msg||code),{code})}
-function makeApiSample(){return {
+function pickJSON(txt){txt=String(txt||"").replace(/<think>[\s\S]*?<\/think>/g,"");const a=txt.indexOf("{"),b=txt.lastIndexOf("}");if(a<0||b<a)throw apiErr("bad_output");try{return JSON.parse(txt.slice(a,b+1))}catch(e){throw apiErr("bad_output")}}
+function makeApiSample(cfg){return {
   limits:async()=>({images:true}),
-  async json(prompt,opt={}){const key=apiKey();if(!key)throw apiErr("no_key","尚未設定 API 金鑰");
-    const content=[];const imgs=opt.images?(Array.isArray(opt.images)?opt.images:[opt.images]):[];
-    for(const b of imgs)content.push({type:"image",source:{type:"base64",media_type:b.type||"image/jpeg",data:await blob64(b)}});
-    content.push({type:"text",text:prompt});
-    let res;try{res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-      body:JSON.stringify({model:apiModel(),max_tokens:4000,messages:[{role:"user",content}]})})}catch(e){throw apiErr("network","網路連線失敗")}
-    if(!res.ok){const t=await res.text().catch(()=>"");if(res.status===401||res.status===403)throw apiErr("bad_key","API 金鑰無效");if(res.status===429)throw apiErr("rate_limited");
-      if(/credit|billing|balance/i.test(t))throw apiErr("no_credit","API 帳戶餘額不足");throw apiErr("api_error","API 錯誤 "+res.status)}
-    const j=await res.json();const txt=(j.content||[]).map(c=>c.text||"").join("");const a=txt.indexOf("{"),b=txt.lastIndexOf("}");
-    if(a<0||b<a)throw apiErr("bad_output","無法解讀回覆");return JSON.parse(txt.slice(a,b+1))}}}
+  async json(prompt,opt={}){const c=cfg||aiCfg(),p=c.provider,P=PROV[p],key=(c.keys[p]||"").trim(),model=cfgModel(c),ep=cfgEp(c);
+    if(!key)throw apiErr("no_key");if(!model)throw apiErr("bad_model");if(!ep)throw apiErr("no_ep");
+    const imgs=[];for(const b of (opt.images?(Array.isArray(opt.images)?opt.images:[opt.images]):[]))imgs.push({mime:b.type||"image/jpeg",data:await blob64(b)});
+    let url=ep,headers={"content-type":"application/json"},body;
+    if(P.kind==="claude"){Object.assign(headers,{"x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"});
+      body={model,max_tokens:4000,messages:[{role:"user",content:[...imgs.map(i=>({type:"image",source:{type:"base64",media_type:i.mime,data:i.data}})),{type:"text",text:prompt}]}]}}
+    else if(P.kind==="gemini"){url=ep.replace(/\/$/,"")+"/"+encodeURIComponent(model)+":generateContent";headers["x-goog-api-key"]=key;
+      body={contents:[{role:"user",parts:[...imgs.map(i=>({inline_data:{mime_type:i.mime,data:i.data}})),{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}}}
+    else{headers.authorization="Bearer "+key;
+      body={model,messages:[{role:"user",content:[...imgs.map(i=>({type:"image_url",image_url:{url:"data:"+i.mime+";base64,"+i.data}})),{type:"text",text:prompt}]}]}}
+    let res;try{res=await fetch(url,{method:"POST",headers,body:JSON.stringify(body)})}catch(e){throw apiErr("network")}
+    if(!res.ok){const t=await res.text().catch(()=>"");
+      if(/insufficient_quota|credit|billing|balance|余额|餘額/i.test(t))throw apiErr("no_credit");
+      if(res.status===401||res.status===403||/API_KEY_INVALID|invalid.{0,10}api.?key|authorized_error|login fail/i.test(t))throw apiErr("bad_key");
+      if(res.status===429)throw apiErr("rate_limited");
+      if(res.status===404||/model.{0,40}(not (found|exist|support))|does not exist|invalid model|unknown model/i.test(t))throw apiErr("bad_model");
+      if(/image|vision|multimodal/i.test(t))throw apiErr("no_vision");
+      throw apiErr("api_error","API 錯誤 "+res.status)}
+    const j=await res.json();
+    if(j.base_resp&&j.base_resp.status_code){const m=String(j.base_resp.status_msg||"");throw apiErr(/key|auth|login/i.test(m)?"bad_key":/balance|insufficient/i.test(m)?"no_credit":"api_error",m)}
+    let txt="";if(P.kind==="claude")txt=(j.content||[]).map(c=>c.text||"").join("");
+    else if(P.kind==="gemini")txt=((j.candidates||[])[0]?.content?.parts||[]).map(x=>x.text||"").join("");
+    else{const mc=(j.choices||[])[0]?.message?.content;txt=Array.isArray(mc)?mc.map(x=>x.text||"").join(""):(mc||"")}
+    return pickJSON(txt)}}}
 function setupApi(){if(apiKey()){sample=makeApiSample();canImg=true;aiOff="";imgOff=false;sampleState="done"}else{sample=null;canImg=false;sampleState="none"}}
-const aiMsg=e=>({bad_key:"API 金鑰無效，請到「設定」檢查",no_credit:"API 帳戶餘額不足，請到 Anthropic Console 儲值",network:"網路連線失敗",rate_limited:"使用量已達上限，請稍後再試",no_key:"尚未設定 API 金鑰"})[e&&e.code];
-function modalSettings(){const k=apiKey(),m=apiModel();
-  return `<div class="overlay"><div class="sheet" role="dialog" aria-label="設定"><div class="sheet-head"><button class="btn ghost" data-act="close">取消</button><h3>照片辨識設定</h3><button class="btn ghost" data-act="saveApi"><b>儲存</b></button></div>
+const aiMsg=e=>({bad_key:"API 金鑰無效，請到「設定」檢查",no_credit:"API 帳戶餘額不足，請到服務商後台儲值",network:"連線失敗：可能是網路問題，或該服務不允許從網頁直接呼叫",rate_limited:"使用量已達上限，請稍後再試",no_key:"尚未設定 API 金鑰",
+  bad_model:"找不到這個模型，請檢查模型名稱",no_vision:"這個模型不支援圖片，請換一個能讀圖片的模型",no_ep:"請填入 API 網址",bad_output:"AI 回覆的格式無法解讀，請再試一次或換模型"})[e&&e.code];
+function modalSettings(){const c=S.edit.data,p=c.provider,P=PROV[p];
+  return `<div class="overlay"><div class="sheet" role="dialog" aria-label="照片辨識設定"><div class="sheet-head"><button class="btn ghost" data-act="close">取消</button><h3>照片辨識設定</h3><button class="btn ghost" data-act="saveApi"><b>儲存</b></button></div>
   <div class="sheet-body">
-  <p style="margin-top:0">填入你自己的 Claude API 金鑰，上傳收據照片時就會自動辨識品項與金額。</p>
-  <label class="field" style="margin-bottom:12px">Claude API 金鑰<input type="password" id="apiKey" value="${esc(k)}" placeholder="sk-ant-…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-  <label class="field" style="margin-bottom:12px">辨識模型<select id="apiModel">
-    <option value="claude-haiku-5-5" ${m==="claude-haiku-5-5"?"selected":""}>Claude Haiku 5.5（快、便宜，建議）</option>
-    <option value="claude-sonnet-5-5" ${m==="claude-sonnet-5-5"?"selected":""}>Claude Sonnet 5.5（手寫或模糊收據較準）</option></select></label>
-  <div class="row" style="margin-bottom:14px"><button class="btn small" data-act="testApi" ${S.apiTesting?"disabled":""}>${S.apiTesting?"測試中…":"測試金鑰"}</button>${k?`<button class="btn small danger" data-act="clearApi">刪除金鑰</button>`:""}</div>
+  <p style="margin-top:0">選擇一家 AI 服務並填入你的 API 金鑰，上傳收據照片時就會自動辨識品項與金額。</p>
+  <label class="field" style="margin-bottom:12px">AI 服務<select data-api="provider">${Object.entries(PROV).map(([k,v])=>`<option value="${k}" ${k===p?"selected":""}>${v.name}${c.keys[k]?"（已設定）":""}</option>`).join("")}</select></label>
+  <label class="field" style="margin-bottom:12px">API 金鑰<input type="password" data-api="key" value="${esc(c.keys[p]||"")}" placeholder="${P.ph}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+  <label class="field" style="margin-bottom:4px">模型<input data-api="model" list="mlist" value="${esc(c.models[p]||"")}" placeholder="${esc(P.models[0]||"例如 my-vision-model")}" autocapitalize="off" spellcheck="false"><datalist id="mlist">${P.models.map(m=>`<option value="${m}">`).join("")}</datalist></label>
+  <p class="hint" style="margin:0 0 12px">${P.models.length?"留空會用 "+P.models[0]+"。":""}${esc(P.hint)}</p>
+  ${P.epEdit?`<label class="field" style="margin-bottom:12px">API 網址<input data-api="ep" value="${esc(c.endpoints[p]||"")}" placeholder="${esc(P.ep||"https://…/v1/chat/completions")}" autocapitalize="off" spellcheck="false"></label>`:""}
+  <div class="row" style="margin-bottom:14px"><button class="btn small" data-act="testApi" ${S.apiTesting?"disabled":""}>${S.apiTesting?"測試中…":"測試這組設定"}</button>${c.keys[p]?`<button class="btn small danger" data-act="clearApi">刪除此金鑰</button>`:""}</div>
   <div class="item hint" style="line-height:1.7">
-  • 金鑰到 <b>console.anthropic.com</b> 註冊後，在「API Keys」建立，並需先儲值才能使用。<br>
+  ${P.keyUrl?`• 金鑰申請：<b>${P.keyUrl}</b>（多數服務需先儲值或綁定付款）。<br>`:""}
+  • 只會使用上方選取的服務；各家金鑰會分開保存，切換時不用重填。<br>
   • 金鑰只存在這支手機的瀏覽器裡，不會上傳到網站。<br>
-  • 費用從你的 API 帳戶扣，辨識一張收據通常不到新台幣 1 元（Sonnet 會貴一些）。<br>
-  • 請勿把金鑰寫進網站檔案或傳給不信任的人；別人拿到就能用你的額度。</div>
+  • 費用從你的 API 帳戶扣，辨識一張收據通常只要幾毛錢新台幣。<br>
+  • 請勿把金鑰寫進網站檔案或傳給不信任的人。</div>
   </div></div></div>`}
 /* ---------- file saving: Claude downloads, else share sheet / browser download ---------- */
 async function saveFile(name,blob){
@@ -816,16 +844,14 @@ const A={
     const i=S.receipts.findIndex(x=>x.id===r.id);if(i<0)S.receipts.push(r);else S.receipts[i]=r;persist(r);
     toast(rOK(r)?"已儲存收據":"已儲存，付款金額還沒對上");S.edit=null;S.bigPhoto=false;render()},
   async delRc(){if(!await askConfirm("刪除這張收據？"))return;const id=S.edit.data.id;delPhoto(S.receipts.find(r=>r.id===id));S.receipts=S.receipts.filter(r=>r.id!==id);remove(id);S.edit=null;render()},
-  settings(){S.edit={type:"settings",data:{id:"settings"}};render()},
-  saveApi(){const k=($("#apiKey").value||"").trim(),m=$("#apiModel").value;try{if(k)localStorage.setItem(AK,k);else localStorage.removeItem(AK);localStorage.setItem(AM,m)}catch(e){}
-    setupApi();S.edit=null;render();toast(k?"已儲存，上傳照片會自動辨識":"已關閉自動辨識")},
-  async testApi(){const k=($("#apiKey").value||"").trim(),m=$("#apiModel").value;if(!k){toast("請先輸入金鑰");return}
-    const ok=apiKey(),om=apiModel();try{localStorage.setItem(AK,k);localStorage.setItem(AM,m)}catch(e){}
-    S.apiTesting=true;renderModal();$("#apiKey").value=k;
-    try{await makeApiSample().json('只回覆這個 JSON：{"ok":true}');toast("✓ 金鑰可以使用")}catch(e){toast(aiMsg(e)||e.message||"測試失敗")}
-    try{if(ok)localStorage.setItem(AK,ok);else localStorage.removeItem(AK);localStorage.setItem(AM,om)}catch(e){}
-    S.apiTesting=false;if(S.edit&&S.edit.type==="settings"){renderModal();$("#apiKey").value=k;$("#apiModel").value=m}},
-  async clearApi(){if(!await askConfirm("刪除這支手機上的 API 金鑰？","刪除"))return;try{localStorage.removeItem(AK)}catch(e){}setupApi();S.edit=null;render();toast("已刪除金鑰")},
+  settings(){S.edit={type:"settings",data:Object.assign({id:"settings"},JSON.parse(JSON.stringify(aiCfg())))};render()},
+  saveApi(){const c=S.edit.data;delete c.id;try{localStorage.setItem(AIC,JSON.stringify(c));localStorage.removeItem("tripsplit.apikey");localStorage.removeItem("tripsplit.apimodel")}catch(e){}
+    setupApi();S.edit=null;render();toast(apiKey()?"已儲存，使用 "+PROV[c.provider].name+" 辨識照片":"未填金鑰，已關閉自動辨識")},
+  async testApi(){const c=JSON.parse(JSON.stringify(S.edit.data));if(!(c.keys[c.provider]||"").trim()){toast("請先輸入金鑰");return}
+    S.apiTesting=true;renderModal();
+    try{const r=await makeApiSample(c).json('只回覆這個 JSON，不要其他文字：{"ok":true}');toast(r&&r.ok?"✓ 設定可以使用":"已連線，但回覆格式異常")}catch(e){toast(aiMsg(e)||e.message||"測試失敗")}
+    S.apiTesting=false;if(S.edit&&S.edit.type==="settings")renderModal()},
+  async clearApi(){const c=S.edit.data;if(!await askConfirm("刪除 "+PROV[c.provider].name+" 的 API 金鑰？","刪除"))return;delete c.keys[c.provider];renderModal()},
   setSvc(el){S.edit.data.svc=el.dataset.v==="0"?"":el.dataset.v;renderModal()},
   addItem(){S.edit.data.items.push({id:uidGen(),name:"",amount:0,split:null});renderModal()},
   delItem(el){S.edit.data.items.splice(+el.dataset.i,1);renderModal()},
@@ -865,12 +891,14 @@ document.addEventListener("input",e=>{const el=e.target;
       el._t=setTimeout(()=>{if(c)persist(c);S.trips.filter(t=>t.people.some(p=>p.id===id)).forEach(persist)},600);return}
     S[k]=el.value;const pos=el.selectionStart;render();const n=document.querySelector(`[data-f="${k}"]`);if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}
   if(!S.edit)return;const d=S.edit.data;
+  if(el.dataset.api&&S.edit.type==="settings"){const k=el.dataset.api,pv=d.provider;if(k==="key")d.keys[pv]=el.value.trim();else if(k==="model")d.models[pv]=el.value.trim();else if(k==="ep")d.endpoints[pv]=el.value.trim();return}
   if(el.dataset.e){d[el.dataset.e]=el.dataset.e==="svc"?el.value.replace(/[^\d.]/g,""):el.value;if(el.dataset.e==="svc")refreshTotals();return}
   if(el.dataset.ri!=null){const it=d.items[+el.dataset.ri];it[el.dataset.k]=el.dataset.k==="amount"?el.value.replace(/[^\d.\-]/g,""):el.value;refreshTotals();return}
   if(el.dataset.wi!=null){const it=d.items[+el.dataset.wi];it.weights=it.weights||{};it.weights[el.dataset.id]=el.value.trim();refreshTotals();return}
   if(el.dataset.pi!=null){const p=d.payers[+el.dataset.pi];p[el.dataset.k]=el.dataset.k==="amount"?el.value.replace(/[^\d.\-]/g,""):el.value;refreshTotals();return}
 });
 document.addEventListener("change",e=>{const el=e.target;
+  if(el.dataset.api==="provider"&&S.edit&&S.edit.type==="settings"){S.edit.data.provider=el.value;renderModal();return}
   if(el.dataset.pi!=null&&S.edit){S.edit.data.payers[+el.dataset.pi][el.dataset.k]=el.value;refreshTotals()}
   if(el.dataset.e&&S.edit)S.edit.data[el.dataset.e]=el.value;
   if(el.dataset.f==="pname")render();
