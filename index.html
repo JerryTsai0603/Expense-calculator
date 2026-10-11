@@ -73,7 +73,7 @@ button{cursor:pointer}
 @media(min-width:640px){.searchbar{grid-template-columns:1fr auto}}
 
 h2.sec{font-family:var(--serif);font-weight:600;font-size:1.15rem;margin:22px 0 10px;display:flex;align-items:center;gap:10px}
-h2.sec .grow{flex:1}
+h2.sec .grow{flex:1;white-space:nowrap}
 
 /* trips as luggage tags */
 .trips{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
@@ -297,7 +297,7 @@ function remove(id){saveLocal();if(db)col().doc(id).delete().catch(e=>console.wa
 function setSync(t){$("#sync").textContent=t}
 
 async function initRuntime(){
-  if(!window.claude||!claude.use){sampleState="none";setSync("資料存在這支手機");render();return}
+  if(!window.claude||!claude.use){setupApi();setSync("資料存在這支手機");render();return}
   claude.use("sample").then(async s=>{sample=s;if(s){const l=await s.limits().catch(()=>null);canImg=!!(l&&l.images)}sampleState="done";render()});
   claude.use("downloads").then(d=>{downloads=d;render()});
   claude.use("assets").then(a=>{assets=a;render()});
@@ -380,7 +380,7 @@ function viewHome(){
     hits.sort((a,b)=>(b.date||"").localeCompare(a.date||"")).forEach(r=>{const t=S.trips.find(x=>x.id===r.tripId);h+=rcRow(t,r,true)});
     return h;
   }
-  h+=`<h2 class="sec"><span class="grow">我的旅程</span><button class="btn" data-act="contacts">常用成員</button><button class="btn primary" data-act="newTrip">＋ 新增旅程</button></h2>`;
+  h+=`<h2 class="sec"><span class="grow">我的旅程</span><button class="btn" data-act="contacts">常用成員</button>${!window.claude?`<button class="btn icon" data-act="settings" aria-label="照片辨識設定" title="照片辨識設定">⚙︎</button>`:""}<button class="btn primary" data-act="newTrip">＋ 新增旅程</button></h2>`;
   if(!S.trips.length)return h+`<div class="empty"><p>還沒有旅程。建立一個旅程、加入同行成員，再上傳收據照片就能自動辨識金額。</p><button class="btn primary" data-act="newTrip">建立第一個旅程</button></div>`;
   h+=`<div class="trips">`;
   [...S.trips].sort((a,b)=>(b.start||b.created||"").localeCompare(a.start||a.created||"")).forEach(t=>{
@@ -414,7 +414,7 @@ function tabReceipts(t){
   else if(!aiReady()&&isOwner&&db)h+=`<p class="hint">這個檢視無法直接辨識照片。上傳後照片會先存起來，再交給 Claude 對話辨識並自動填回。</p>`;
   else if(!aiReady()){
     if(sample&&!aiOff)h+=`<div class="queue"><b>改用文字辨識：</b>${aiWhy()}照片照樣上傳附在收據上，接著在收據畫面打開「貼上收據文字」，就能讓 Claude 整理品項與金額。<br>iPhone 取得文字的方法：在「照片」App 打開收據，長按文字 →「全選」→「拷貝」。</div>`;
-    else if(!window.claude)h+=`<p class="hint">照片會附在收據上，品項與金額請手動填寫。</p>`;
+    else if(!window.claude)h+=`<div class="queue">想讓照片自動辨識金額？到首頁右上的 <b>⚙︎ 設定</b> 填入 Claude API 金鑰即可；不設定也能手動填寫。<button class="btn small" data-act="settings" style="margin-left:6px">前往設定</button></div>`;
     else h+=`<div class="notice">${aiWhy()}照片仍可上傳並附在收據上，金額請手動填寫。</div>`;
   }
   const rs=recOf(t.id);
@@ -478,7 +478,7 @@ function renderModal(){
   if(!S.edit){m.innerHTML="";document.body.style.overflow="";return}
   document.body.style.overflow="hidden";
   const scroll=m.querySelector(".sheet-body")?.scrollTop||0;
-  m.innerHTML=S.edit.type==="trip"?modalTrip():S.edit.type==="contacts"?modalContacts():modalReceipt();
+  m.innerHTML=S.edit.type==="settings"?modalSettings():S.edit.type==="trip"?modalTrip():S.edit.type==="contacts"?modalContacts():modalReceipt();
   const b=m.querySelector(".sheet-body");if(b)b.scrollTop=scroll;
   if(S.edit.type==="rc"){const r=S.edit.data;if(r.photoN&&!PH[r.id])getPhoto(r).then(d=>{const el=m.querySelector("img.photo");if(d&&el&&S.edit&&S.edit.data.id===r.id)el.src=d})}
 }
@@ -592,7 +592,7 @@ async function handleFiles(files){
         else if(["images_unavailable","image_rejected"].includes(e.code)){imgOff=true;canImg=false;q.status="已附上照片，請用「貼上收據文字」辨識"}
         else if(["sampling_disabled","capability_disabled","not_declared"].includes(e.code)){aiOff="目前的檢視無法使用 Claude。";q.status="已建立空白收據"}
         else if(e.code==="rate_limited"){q.status="使用量已達上限，已建立空白收據"}
-        else q.status="辨識失敗，已建立空白收據";
+        else q.status=(aiMsg(e)||"辨識失敗")+"，已建立空白收據";
       }
       const {items,tot,svc}=buildItems(data);
       if(!items.length)items.push({id:uidGen(),name:"消費",amount:(tot||0)/100,split:null});
@@ -611,6 +611,41 @@ async function handleFiles(files){
   setTimeout(()=>{S.queue=S.queue.filter(q=>q.status==="等待中"||q.status==="辨識中…");render()},4000);
 }
 
+/* ---------- own Claude API key (standalone web version) ---------- */
+const AK="tripsplit.apikey",AM="tripsplit.apimodel";
+const apiKey=()=>{try{return localStorage.getItem(AK)||""}catch(e){return ""}};
+const apiModel=()=>{try{return localStorage.getItem(AM)||"claude-haiku-5-5"}catch(e){return "claude-haiku-5-5"}};
+function blob64(b){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(",")[1]);r.onerror=()=>rej(r.error);r.readAsDataURL(b)})}
+function apiErr(code,msg){return Object.assign(new Error(msg||code),{code})}
+function makeApiSample(){return {
+  limits:async()=>({images:true}),
+  async json(prompt,opt={}){const key=apiKey();if(!key)throw apiErr("no_key","尚未設定 API 金鑰");
+    const content=[];const imgs=opt.images?(Array.isArray(opt.images)?opt.images:[opt.images]):[];
+    for(const b of imgs)content.push({type:"image",source:{type:"base64",media_type:b.type||"image/jpeg",data:await blob64(b)}});
+    content.push({type:"text",text:prompt});
+    let res;try{res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+      body:JSON.stringify({model:apiModel(),max_tokens:4000,messages:[{role:"user",content}]})})}catch(e){throw apiErr("network","網路連線失敗")}
+    if(!res.ok){const t=await res.text().catch(()=>"");if(res.status===401||res.status===403)throw apiErr("bad_key","API 金鑰無效");if(res.status===429)throw apiErr("rate_limited");
+      if(/credit|billing|balance/i.test(t))throw apiErr("no_credit","API 帳戶餘額不足");throw apiErr("api_error","API 錯誤 "+res.status)}
+    const j=await res.json();const txt=(j.content||[]).map(c=>c.text||"").join("");const a=txt.indexOf("{"),b=txt.lastIndexOf("}");
+    if(a<0||b<a)throw apiErr("bad_output","無法解讀回覆");return JSON.parse(txt.slice(a,b+1))}}}
+function setupApi(){if(apiKey()){sample=makeApiSample();canImg=true;aiOff="";imgOff=false;sampleState="done"}else{sample=null;canImg=false;sampleState="none"}}
+const aiMsg=e=>({bad_key:"API 金鑰無效，請到「設定」檢查",no_credit:"API 帳戶餘額不足，請到 Anthropic Console 儲值",network:"網路連線失敗",rate_limited:"使用量已達上限，請稍後再試",no_key:"尚未設定 API 金鑰"})[e&&e.code];
+function modalSettings(){const k=apiKey(),m=apiModel();
+  return `<div class="overlay"><div class="sheet" role="dialog" aria-label="設定"><div class="sheet-head"><button class="btn ghost" data-act="close">取消</button><h3>照片辨識設定</h3><button class="btn ghost" data-act="saveApi"><b>儲存</b></button></div>
+  <div class="sheet-body">
+  <p style="margin-top:0">填入你自己的 Claude API 金鑰，上傳收據照片時就會自動辨識品項與金額。</p>
+  <label class="field" style="margin-bottom:12px">Claude API 金鑰<input type="password" id="apiKey" value="${esc(k)}" placeholder="sk-ant-…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+  <label class="field" style="margin-bottom:12px">辨識模型<select id="apiModel">
+    <option value="claude-haiku-5-5" ${m==="claude-haiku-5-5"?"selected":""}>Claude Haiku 5.5（快、便宜，建議）</option>
+    <option value="claude-sonnet-5-5" ${m==="claude-sonnet-5-5"?"selected":""}>Claude Sonnet 5.5（手寫或模糊收據較準）</option></select></label>
+  <div class="row" style="margin-bottom:14px"><button class="btn small" data-act="testApi" ${S.apiTesting?"disabled":""}>${S.apiTesting?"測試中…":"測試金鑰"}</button>${k?`<button class="btn small danger" data-act="clearApi">刪除金鑰</button>`:""}</div>
+  <div class="item hint" style="line-height:1.7">
+  • 金鑰到 <b>console.anthropic.com</b> 註冊後，在「API Keys」建立，並需先儲值才能使用。<br>
+  • 金鑰只存在這支手機的瀏覽器裡，不會上傳到網站。<br>
+  • 費用從你的 API 帳戶扣，辨識一張收據通常不到新台幣 1 元（Sonnet 會貴一些）。<br>
+  • 請勿把金鑰寫進網站檔案或傳給不信任的人；別人拿到就能用你的額度。</div>
+  </div></div></div>`}
 /* ---------- file saving: Claude downloads, else share sheet / browser download ---------- */
 async function saveFile(name,blob){
   if(downloads)return downloads.save({filename:name,data:blob});
@@ -773,7 +808,7 @@ const A={
       if(!items.length){toast("看不出消費明細，請確認文字內容");}
       else{r.items=items;r.svc=svc;r.aiTotal=tot?tot/100:null;if(!r.store&&data.store)r.store=String(data.store);
         if(/^\d{4}-\d{2}-\d{2}$/.test(data.date||""))r.date=data.date;r.pasteText="";toast("已填入 "+items.length+" 個項目，請核對")}
-    }catch(e){toast(e.code==="not_granted"?"需要允許使用 Claude 才能辨識":e.code==="rate_limited"?"Claude 使用量已達上限，請稍後再試":"辨識失敗，請再試一次")}
+    }catch(e){toast(e.code==="not_granted"?"需要允許使用 Claude 才能辨識":e.code==="rate_limited"?"Claude 使用量已達上限，請稍後再試":(aiMsg(e)||"辨識失敗，請再試一次"))}
     S.parsing=false;if(S.edit)renderModal()},
   copyRelay(){(navigator.clipboard?navigator.clipboard.writeText(RELAY):Promise.reject()).then(()=>toast("已複製，貼到 Claude 對話送出即可")).catch(()=>toast("請長按文字手動複製"))},
   saveRc(){const r=S.edit.data;delete r.pasteText;if(r.items.some(i=>cents(i.amount)))r.pending=false;r.items=r.items.filter(i=>i.name.trim()||cents(i.amount));
@@ -781,6 +816,16 @@ const A={
     const i=S.receipts.findIndex(x=>x.id===r.id);if(i<0)S.receipts.push(r);else S.receipts[i]=r;persist(r);
     toast(rOK(r)?"已儲存收據":"已儲存，付款金額還沒對上");S.edit=null;S.bigPhoto=false;render()},
   async delRc(){if(!await askConfirm("刪除這張收據？"))return;const id=S.edit.data.id;delPhoto(S.receipts.find(r=>r.id===id));S.receipts=S.receipts.filter(r=>r.id!==id);remove(id);S.edit=null;render()},
+  settings(){S.edit={type:"settings",data:{id:"settings"}};render()},
+  saveApi(){const k=($("#apiKey").value||"").trim(),m=$("#apiModel").value;try{if(k)localStorage.setItem(AK,k);else localStorage.removeItem(AK);localStorage.setItem(AM,m)}catch(e){}
+    setupApi();S.edit=null;render();toast(k?"已儲存，上傳照片會自動辨識":"已關閉自動辨識")},
+  async testApi(){const k=($("#apiKey").value||"").trim(),m=$("#apiModel").value;if(!k){toast("請先輸入金鑰");return}
+    const ok=apiKey(),om=apiModel();try{localStorage.setItem(AK,k);localStorage.setItem(AM,m)}catch(e){}
+    S.apiTesting=true;renderModal();$("#apiKey").value=k;
+    try{await makeApiSample().json('只回覆這個 JSON：{"ok":true}');toast("✓ 金鑰可以使用")}catch(e){toast(aiMsg(e)||e.message||"測試失敗")}
+    try{if(ok)localStorage.setItem(AK,ok);else localStorage.removeItem(AK);localStorage.setItem(AM,om)}catch(e){}
+    S.apiTesting=false;if(S.edit&&S.edit.type==="settings"){renderModal();$("#apiKey").value=k;$("#apiModel").value=m}},
+  async clearApi(){if(!await askConfirm("刪除這支手機上的 API 金鑰？","刪除"))return;try{localStorage.removeItem(AK)}catch(e){}setupApi();S.edit=null;render();toast("已刪除金鑰")},
   setSvc(el){S.edit.data.svc=el.dataset.v==="0"?"":el.dataset.v;renderModal()},
   addItem(){S.edit.data.items.push({id:uidGen(),name:"",amount:0,split:null});renderModal()},
   delItem(el){S.edit.data.items.splice(+el.dataset.i,1);renderModal()},
